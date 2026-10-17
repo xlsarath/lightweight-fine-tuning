@@ -7,6 +7,8 @@ Turning GPT-2, a 124M-parameter text generator, into a four-class news topic cla
 | GPT-2 before fine-tuning | 27.0% | 0.115 | 0 | - |
 | **GPT-2 + LoRA (r = 8)** | **89.1%** | **0.891** | **297,984** | **1.15 MB** |
 
+I also trained the same adapter with **QLoRA**, on a copy of GPT-2 held in 4 bits, using this laptop's Apple Silicon GPU: 88.9% after one epoch, with the model taking 191 MB of memory instead of 475 MB.
+
 Both rows are measured on the same 1,000 held-out AG News items with the same evaluation code. The fine-tuned row is the adapter **reloaded from disk**, and it reproduces the in-memory model's predictions exactly.
 
 ![Confusion matrices before and after fine-tuning](assets/before-after.png)
@@ -33,7 +35,7 @@ pip install -r requirements.txt
 jupyter lab LightweightFineTuning.ipynb
 ```
 
-Then run all cells. The whole notebook takes about six minutes on a laptop GPU: two minutes for the main fine-tuning run, and the rest for the optional comparison of configurations at the end. GPT-2 and the AG News dataset download from the Hugging Face Hub on first use.
+Then run all cells. The whole notebook takes about six minutes on a laptop GPU: two minutes for the main fine-tuning run, and the rest for the two optional experiments at the end (the rank comparison and QLoRA). The QLoRA cells need a CUDA or Apple Silicon GPU and skip themselves otherwise. GPT-2 and the AG News dataset download from the Hugging Face Hub on first use.
 
 **In the course workspace**, open the notebook and run all cells. The code adapts to older library versions on its own (the three places that need it are marked "Compatibility 1/2/3 of 3" in the notebook).
 
@@ -110,15 +112,28 @@ The notebook also merges the adapter into the base weights (`merge_and_unload`) 
 - Rank does not change training time (about 42 seconds for every rank, against 22 for head-only). The cost is the backward pass through the network, not the adapter size.
 - With 1,000 test items each accuracy carries about ±2 points of sampling error, so neighbouring ranks cannot be told apart. For this task, rank 1 or 2 would do almost as well as 8 with a much smaller adapter.
 
+**QLoRA.** The same rank-8 adapter, trained on GPT-2 quantized to 4-bit NF4 with `bitsandbytes` (recent versions run on Apple Silicon as well as NVIDIA GPUs):
+
+| | LoRA r=8 | QLoRA r=8 |
+|---|---:|---:|
+| Frozen base weights stored as | 32-bit | 4-bit NF4 |
+| Model in memory | 474.7 MB | **191.2 MB** |
+| Accuracy after 1 epoch | 87.8% | 88.9% |
+| Training time on this laptop | about 42 s | about 32 s |
+
+- Where the 191.2 MB goes: 84,934,656 linear-layer weights at half a byte each (40.5 MB), plus 39,508,224 parameters kept in 32-bit at 4 bytes each (150.7 MB).
+- The saving is 2.5x rather than 8x because QLoRA only quantizes linear layers, and GPT-2's embeddings are 32% of the model. In larger models the embeddings are a much smaller share.
+- The 1.1-point accuracy difference is within sampling error: quantization cost nothing measurable here.
+
 ## Limitations
 
 - The "before" model has a randomly initialized head, so it is a floor, not a competitor. The head-only row (83.7%) is the fairer measure of what LoRA itself adds: about 3 to 5 points.
 - One seed and a 4,000-item training subset. More data would raise every number.
-- QLoRA (4-bit quantization with `bitsandbytes`) was not attempted: it needs a CUDA GPU, and this was developed on Apple Silicon.
 
 ## References
 
 - Hu et al. (2021). *LoRA: Low-Rank Adaptation of Large Language Models.* [arXiv:2106.09685](https://arxiv.org/abs/2106.09685)
+- Dettmers, Pagnoni, Holtzman & Zettlemoyer (2023). *QLoRA: Efficient Finetuning of Quantized LLMs.* [arXiv:2305.14314](https://arxiv.org/abs/2305.14314)
 - Aghajanyan, Zettlemoyer & Gupta (2020). *Intrinsic Dimensionality Explains the Effectiveness of Language Model Fine-Tuning.* [arXiv:2012.13255](https://arxiv.org/abs/2012.13255)
 - Hugging Face PEFT: [LoRA reference](https://huggingface.co/docs/peft/package_reference/lora)
 - Dataset: [fancyzhx/ag_news](https://huggingface.co/datasets/fancyzhx/ag_news)
