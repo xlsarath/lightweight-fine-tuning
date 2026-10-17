@@ -2,24 +2,24 @@
 
 Turning GPT-2, a 124M-parameter text generator, into a four-class news topic classifier by training **0.24% of its weights** with LoRA through the Hugging Face [`peft`](https://huggingface.co/docs/peft) library.
 
-| | Accuracy | Macro-F1 | Trained parameters | Stored on disk |
-|---|---:|---:|---:|---:|
-| GPT-2 before fine-tuning | 27.0% | 0.115 | 0 | - |
-| **GPT-2 + LoRA (r = 8)** | **89.1%** | **0.891** | **297,984** | **1.15 MB** |
+| Model | Accuracy | Precision | Recall | F1 | Trained parameters |
+|---|---:|---:|---:|---:|---:|
+| Base GPT-2, as downloaded (untrained classification head) | 27.0% | 0.245 | 0.254 | 0.115 | 0 |
+| Base GPT-2, zero-shot (no added layer) | 62.5% | 0.701 | 0.623 | 0.607 | 0 |
+| **GPT-2 + LoRA, loaded with `AutoPeftModelForSequenceClassification`** | **89.4%** | **0.895** | **0.894** | **0.894** | **297,984** |
 
-I also trained the same adapter with **QLoRA**, on a copy of GPT-2 held in 4 bits, using this laptop's Apple Silicon GPU: 88.9% after one epoch, with the model taking 191 MB of memory instead of 475 MB.
+All three rows are measured on the same 1,000 held-out AG News items with the same `Trainer.evaluate()` settings and metrics (precision, recall and F1 are macro-averaged over the four classes). The fine-tuned row is the adapter **loaded back from disk**, and it reproduces the trained model's predictions exactly.
 
-Both rows are measured on the same 1,000 held-out AG News items with the same evaluation code. The fine-tuned row is the adapter **reloaded from disk**, and it reproduces the in-memory model's predictions exactly.
-
-![Confusion matrices before and after fine-tuning](assets/before-after.png)
+![Base model vs fine-tuned PEFT model on the same test set](assets/comparison.png)
 
 ## What is in this repository
 
 ```
-LightweightFineTuning.ipynb     the notebook: load, evaluate, fine-tune, save, reload, re-evaluate
-gpt2-lora-ag-news/              the saved PEFT weights (LoRA adapters + classification head)
-  adapter_config.json
-  adapter_model.safetensors
+LightweightFineTuning.ipynb     the notebook, organized as Sections 1-8 following the project rubric
+gpt2-lora-ag-news/              the saved PEFT model
+  adapter_config.json           LoRA settings and the base model it applies to
+  adapter_model.safetensors     the trained LoRA adapters + classification head (1.14 MB)
+  tokenizer.json, tokenizer_config.json
 assets/                         figures used in this README
 requirements.txt
 ```
@@ -35,9 +35,9 @@ pip install -r requirements.txt
 jupyter lab LightweightFineTuning.ipynb
 ```
 
-Then run all cells. The whole notebook takes about six minutes on a laptop GPU: two minutes for the main fine-tuning run, and the rest for the two optional experiments at the end (the rank comparison and QLoRA). The QLoRA cells need a CUDA or Apple Silicon GPU and skip themselves otherwise. GPT-2 and the AG News dataset download from the Hugging Face Hub on first use.
+Then run all cells. The whole notebook takes about seven minutes on a laptop GPU: under two minutes for the required fine-tuning, and the rest for the optional experiments at the end. GPT-2 and AG News download from the Hugging Face Hub on first use.
 
-**In the course workspace**, open the notebook and run all cells. The code adapts to older library versions on its own (the three places that need it are marked "Compatibility 1/2/3 of 3" in the notebook).
+**In the course workspace**, open the notebook and run all cells. The code adapts to older library versions on its own (the three places are marked "Compatibility 1/2/3 of 3"). The QLoRA cells need a CUDA or Apple Silicon GPU and skip themselves otherwise.
 
 **Just the saved model**, without re-training:
 
@@ -47,26 +47,27 @@ from transformers import AutoTokenizer
 
 labels = ["World", "Sports", "Business", "Sci/Tech"]
 model = AutoPeftModelForSequenceClassification.from_pretrained("gpt2-lora-ag-news", num_labels=4)
-tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
-tokenizer.pad_token = tokenizer.eos_token
-model.config.pad_token_id = tokenizer.pad_token_id   # GPT-2 needs this to find the last real token
+model.config.pad_token_id = model.config.eos_token_id   # GPT-2 needs this to find the last real token
+tokenizer = AutoTokenizer.from_pretrained("gpt2-lora-ag-news")
 
 inputs = tokenizer("Striker scores twice in stoppage time to win the final", return_tensors="pt")
 print(labels[model(**inputs).logits.argmax(-1).item()])   # Sports
 ```
 
+## How the notebook follows the rubric
+
+| Rubric item | Section | What it does |
+|---|---|---|
+| Load a pretrained HF model | 1 | `openai-community/gpt2` with `AutoModelForSequenceClassification` (4 labels) |
+| Load and preprocess a dataset | 2 | [AG News](https://huggingface.co/datasets/fancyzhx/ag_news): 4,000 train / 1,000 test items, GPT-2's `AutoTokenizer`, padding with `DataCollatorWithPadding` |
+| Evaluate the pretrained model | 3 | The base model **as-is** (no training) with `Trainer.evaluate()`: accuracy, precision, recall, F1. Plus a zero-shot evaluation of the unmodified language model |
+| Create a PEFT model | 4 | `LoraConfig(task_type=SEQ_CLS, r=8, lora_alpha=16, lora_dropout=0.1, target_modules=["c_attn"], fan_in_fan_out=True)` + `get_peft_model` |
+| Train the PEFT model | 5 | 2 epochs with `Trainer`, learning rate 5e-4, batch size 16 |
+| Save the PEFT model | 6 | `save_pretrained("gpt2-lora-ag-news")`, in the same folder as the notebook |
+| Load the saved PEFT model | 7 | `AutoPeftModelForSequenceClassification.from_pretrained("gpt2-lora-ag-news", ...)` |
+| Evaluate the fine-tuned model | 8 | The same `Trainer.evaluate()` as Section 3, a side-by-side table and chart, confusion matrices, per-class recall, a paired significance test, and example predictions |
+
 ## Approach
-
-### 1. Prepare the foundation model
-
-- **Model:** `openai-community/gpt2` loaded with `AutoModelForSequenceClassification`, which keeps the pre-trained transformer and adds a new, randomly initialized 4-way linear layer (`score`).
-- **Dataset:** [AG News](https://huggingface.co/datasets/fancyzhx/ag_news) (World, Sports, Business, Sci/Tech). A random 4,000 items for training and 1,000 for testing, all four classes roughly balanced.
-- **Tokenizer:** GPT-2's own. GPT-2 has no padding token, so the end-of-text token is reused for padding and the model is told which id that is.
-- **Baseline evaluation:** `Trainer.evaluate()` with accuracy and macro-F1.
-
-### 2. Lightweight fine-tuning
-
-`LoraConfig(task_type=SEQ_CLS, r=8, lora_alpha=16, lora_dropout=0.1, target_modules=["c_attn"], fan_in_fan_out=True)`, wrapped with `get_peft_model`, trained for 2 epochs with the Hugging Face `Trainer` (learning rate 5e-4, batch size 16), and saved with `save_pretrained`.
 
 LoRA keeps every original weight $W_0$ frozen and learns a small update next to it, $W_0 + \frac{\alpha}{r}BA$, where $A$ has $r$ rows and $B$ has $r$ columns. Where the 297,984 trained parameters come from, step by step:
 
@@ -83,19 +84,19 @@ LoRA keeps every original weight $W_0$ frozen and learns a small update next to 
 | **Total trained** | $294{,}912 + 3{,}072$ | **297,984** |
 | Share of GPT-2 | $297{,}984 \;/\; 124{,}442{,}880$ | 0.24% |
 
+Two GPT-2 details the notebook handles explicitly: GPT-2 has no padding token, so the end-of-text token is used and `pad_token_id` is set on the model (also after reloading); and GPT-2 stores attention weights transposed, so LoRA needs `fan_in_fan_out=True`.
+
 ![Training loss](assets/training-curve.png)
-
-### 3. Inference with the fine-tuned model
-
-All model objects are deleted, the adapter is reloaded from `gpt2-lora-ag-news/` with `AutoPeftModelForSequenceClassification`, and the evaluation from step 1 is repeated on the same test set. Two details matter when reloading: `num_labels` has to be passed again, and `pad_token_id` has to be set again. Without either, a reloaded model scores differently from the one that was saved.
-
-The notebook also merges the adapter into the base weights (`merge_and_unload`) and confirms the merged model gives identical predictions, so serving it costs nothing extra.
 
 ## Results
 
-**Before vs after.** Accuracy goes from 27.0% to 89.1% (95% interval roughly 87% to 91%). The untrained model answers "World" for almost everything. After fine-tuning, Sports is nearly solved (98% recall) and most remaining errors sit between Business and Sci/Tech, where news about technology companies genuinely belongs to both.
+**Base model vs fine-tuned model.** Accuracy rises from 27.0% to 89.4%. The base model with its untrained head answers "World" for 993 of 1,000 items; used zero-shot, the pretrained model reaches 62.5% but rarely recognizes Sci/Tech. After fine-tuning every class improves, Sports is nearly solved (98% recall), and most remaining errors are Business stories labelled Sci/Tech, where technology-company news genuinely belongs to both.
 
-**Comparing PEFT configurations.** To separate what the adapters contribute from what any trained head would give, I trained five configurations for one epoch each under identical settings:
+![Confusion matrices of the three models](assets/before-after.png)
+
+On the items where the fine-tuned and base models disagree, the fine-tuned model is right 659 times to 35 (exact McNemar p ≈ 3 × 10⁻¹⁵⁰), and 311 times to 42 against the zero-shot baseline.
+
+**Comparing PEFT configurations.** Five configurations trained for one epoch each under identical settings:
 
 ![Accuracy against LoRA rank](assets/rank-sweep.png)
 
@@ -107,33 +108,30 @@ The notebook also merges the adapter into the base weights (`merge_and_unload`) 
 | LoRA r = 8 | 297,984 | 87.8% |
 | LoRA r = 32 | 1,182,720 | 88.2% |
 
-- The frozen GPT-2 features already separate topics well: training only the head reaches 83.7%.
-- The first LoRA rank is worth more than the next thirty-one: rank 1 adds 3.2 points, and going from rank 1 to rank 32 adds only 1.3 more.
-- Rank does not change training time (about 42 seconds for every rank, against 22 for head-only). The cost is the backward pass through the network, not the adapter size.
-- With 1,000 test items each accuracy carries about ±2 points of sampling error, so neighbouring ranks cannot be told apart. For this task, rank 1 or 2 would do almost as well as 8 with a much smaller adapter.
+The frozen features already separate topics well (83.7% with only the head trained), the first LoRA rank adds 3.2 points, and going from rank 1 to rank 32 adds only 1.3 more. Training time is the same for every rank: the cost is the backward pass through the network, not the adapter size.
 
-**QLoRA.** The same rank-8 adapter, trained on GPT-2 quantized to 4-bit NF4 with `bitsandbytes` (recent versions run on Apple Silicon as well as NVIDIA GPUs):
+**QLoRA.** The same rank-8 adapter trained on GPT-2 quantized to 4-bit NF4 with `bitsandbytes`, on the laptop's Apple Silicon GPU:
 
 | | LoRA r=8 | QLoRA r=8 |
 |---|---:|---:|
 | Frozen base weights stored as | 32-bit | 4-bit NF4 |
 | Model in memory | 474.7 MB | **191.2 MB** |
 | Accuracy after 1 epoch | 87.8% | 88.9% |
-| Training time on this laptop | about 42 s | about 32 s |
 
-- Where the 191.2 MB goes: 84,934,656 linear-layer weights at half a byte each (40.5 MB), plus 39,508,224 parameters kept in 32-bit at 4 bytes each (150.7 MB).
-- The saving is 2.5x rather than 8x because QLoRA only quantizes linear layers, and GPT-2's embeddings are 32% of the model. In larger models the embeddings are a much smaller share.
-- The 1.1-point accuracy difference is within sampling error: quantization cost nothing measurable here.
+The 191.2 MB is 84,934,656 linear-layer weights at half a byte each (40.5 MB) plus 39,508,224 parameters kept in 32-bit (150.7 MB). The saving is 2.5x rather than 8x because QLoRA only quantizes linear layers and GPT-2's embeddings are 32% of the model. Quantization cost nothing measurable in accuracy.
+
+None of the one-epoch experiments beats the submitted two-epoch model (89.4%).
 
 ## Limitations
 
-- The "before" model has a randomly initialized head, so it is a floor, not a competitor. The head-only row (83.7%) is the fairer measure of what LoRA itself adds: about 3 to 5 points.
+- The untrained-head baseline is a floor, not a competitor. The zero-shot and head-only results are fairer reference points, and the fine-tuned model beats both.
 - One seed and a 4,000-item training subset. More data would raise every number.
+- The test set is also used to report per-epoch metrics during training (no model selection is done on it).
 
 ## References
 
 - Hu et al. (2021). *LoRA: Low-Rank Adaptation of Large Language Models.* [arXiv:2106.09685](https://arxiv.org/abs/2106.09685)
 - Dettmers, Pagnoni, Holtzman & Zettlemoyer (2023). *QLoRA: Efficient Finetuning of Quantized LLMs.* [arXiv:2305.14314](https://arxiv.org/abs/2305.14314)
 - Aghajanyan, Zettlemoyer & Gupta (2020). *Intrinsic Dimensionality Explains the Effectiveness of Language Model Fine-Tuning.* [arXiv:2012.13255](https://arxiv.org/abs/2012.13255)
-- Hugging Face PEFT: [LoRA reference](https://huggingface.co/docs/peft/package_reference/lora)
+- Hugging Face PEFT: [LoRA](https://huggingface.co/docs/peft/package_reference/lora), [AutoPeftModel](https://huggingface.co/docs/peft/package_reference/auto_class)
 - Dataset: [fancyzhx/ag_news](https://huggingface.co/datasets/fancyzhx/ag_news)
