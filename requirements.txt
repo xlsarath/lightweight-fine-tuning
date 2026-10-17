@@ -1,0 +1,10 @@
+accelerate==1.15.0
+datasets==5.1.0
+ipykernel==7.4.0
+jupyterlab==4.6.4
+matplotlib==3.11.2
+numpy==2.5.4
+pandas==3.0.6
+peft==0.21.2
+torch==2.14.1
+transformers==5.19.0
