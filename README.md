@@ -35,9 +35,9 @@ pip install -r requirements.txt
 jupyter lab LightweightFineTuning.ipynb
 ```
 
-Then run all cells. The whole notebook takes about seven minutes on a laptop GPU: under two minutes for the required fine-tuning, and the rest for the optional experiments at the end. GPT-2 and AG News download from the Hugging Face Hub on first use.
+Then run all cells. The whole notebook takes about seven minutes on a laptop GPU: under two minutes for the required fine-tuning, and the rest for two further experiments at the end (LoRA rank and QLoRA). GPT-2 and AG News download from the Hugging Face Hub on first use.
 
-**In the course workspace**, open the notebook and run all cells. The code adapts to older library versions on its own (the three places are marked "Compatibility 1/2/3 of 3"). The QLoRA cells need a CUDA or Apple Silicon GPU and skip themselves otherwise.
+**In the course workspace**, open the notebook and run all cells. The code adapts to older library versions on its own (the three places are marked "Compatibility 1/2/3 of 3"). The QLoRA experiment needs a CUDA or Apple Silicon GPU and skips itself otherwise.
 
 **Just the saved model**, without re-training:
 
@@ -96,7 +96,7 @@ Two GPT-2 details the notebook handles explicitly: GPT-2 has no padding token, s
 
 On the items where the fine-tuned and base models disagree, the fine-tuned model is right 659 times to 35 (exact McNemar p ≈ 3 × 10⁻¹⁵⁰), and 311 times to 42 against the zero-shot baseline.
 
-**Comparing PEFT configurations.** Five configurations trained for one epoch each under identical settings:
+**How much does the LoRA rank matter?** Five configurations trained for one epoch each under identical settings:
 
 ![Accuracy against LoRA rank](assets/rank-sweep.png)
 
@@ -110,7 +110,7 @@ On the items where the fine-tuned and base models disagree, the fine-tuned model
 
 The frozen features already separate topics well (83.7% with only the head trained), the first LoRA rank adds 3.2 points, and going from rank 1 to rank 32 adds only 1.3 more. Training time is the same for every rank: the cost is the backward pass through the network, not the adapter size.
 
-**QLoRA.** The same rank-8 adapter trained on GPT-2 quantized to 4-bit NF4 with `bitsandbytes`, on the laptop's Apple Silicon GPU:
+**QLoRA: can the frozen model be stored in 4 bits?** The same rank-8 adapter trained on GPT-2 quantized to 4-bit NF4 with `bitsandbytes`, on the laptop's Apple Silicon GPU:
 
 | | LoRA r=8 | QLoRA r=8 |
 |---|---:|---:|
@@ -120,7 +120,7 @@ The frozen features already separate topics well (83.7% with only the head train
 
 The 191.2 MB is 84,934,656 linear-layer weights at half a byte each (40.5 MB) plus 39,508,224 parameters kept in 32-bit (150.7 MB). The saving is 2.5x rather than 8x because QLoRA only quantizes linear layers and GPT-2's embeddings are 32% of the model. Quantization cost nothing measurable in accuracy.
 
-None of the one-epoch experiments beats the submitted two-epoch model (89.4%).
+None of these one-epoch experiments beats the saved two-epoch model (89.4%).
 
 ## Limitations
 
